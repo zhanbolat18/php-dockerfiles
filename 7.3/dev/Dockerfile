@@ -1,4 +1,4 @@
-FROM php:7.1-fpm as php-base
+FROM php:7.3-fpm as php7_3
 
 RUN apt-get update && apt-get install -y --no-install-recommends apt-utils \
 \
@@ -85,13 +85,18 @@ WORKDIR /var/www
 
 
 
-FROM php-base
+FROM php7_3
 
 # Xdebug
 RUN pecl install xdebug && docker-php-ext-enable xdebug
 
+COPY ./xdebug.configure.sh /xdebug.configure.sh
 COPY ./php.ini /usr/local/etc/php/conf.d/php.ini
+
+ENTRYPOINT ["sh", "/xdebug.configure.sh"]
 
 USER www-data
 
 WORKDIR /var/www
+
+CMD ["docker-php-entrypoint", "php-fpm"]

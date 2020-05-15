@@ -1,4 +1,4 @@
-FROM php:7.1-fpm as php-base
+FROM php:7.3-fpm
 
 RUN apt-get update && apt-get install -y --no-install-recommends apt-utils \
 \
@@ -80,18 +80,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends apt-utils \
 RUN su - www-data -c "composer global require hirak/prestissimo"
 
 ENV PATH=${PATH}:/home/www-data/.composer/vendor/bin
-
-WORKDIR /var/www
-
-
-
-FROM php-base
-
-# Xdebug
-RUN pecl install xdebug && docker-php-ext-enable xdebug
-
-COPY ./php.ini /usr/local/etc/php/conf.d/php.ini
-
-USER www-data
 
 WORKDIR /var/www
