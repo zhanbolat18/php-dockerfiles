@@ -1,0 +1,98 @@
+FROM php:7.4-fpm-alpine as php-base
+
+RUN  apk add --update --no-cache ${PHPIZE_DEPS} \
+            bzip2-dev \
+                libzip-dev \
+                zip unzip \
+\
+#GD requirement libs
+		    libjpeg-turbo-dev \
+            freetype-dev \
+            libpng-dev \
+\
+#ImageMagick
+    imagemagick \
+    imagemagick-dev \
+\
+        libmcrypt-dev \
+        libxpm-dev \
+        libxslt-dev\
+        curl-dev \
+\
+#INTL
+    libintl \
+    icu icu-dev \
+\
+         git \
+\
+# ******** Configure
+# Cconfigure GD
+    && docker-php-ext-configure gd \
+                 --with-jpeg \
+                 --with-freetype \
+	&& docker-php-ext-install gd \
+\
+#Configure Imagick
+    && pecl install imagick \
+    && docker-php-ext-enable imagick \
+\
+#Configure ZIP
+    && docker-php-ext-configure zip \
+	&& docker-php-ext-install zip \
+\
+#Configure Another Dependencies
+	&& docker-php-ext-install \
+	        curl \
+	        xml\
+	        xsl \
+	        sockets \
+	        intl \
+	        bcmath \
+\
+	        pdo \
+	        mysqli \
+	        pdo_mysql\
+\
+# PCNTL Library Ifyou Need
+#    && docker-php-ext-install pcntl
+\
+    && apk del ${PHPIZE_DEPS} \
+    && rm -rf /tmp/* /var/cache/apk/*
+
+ENV COMPOSER_MEMORY_LIMIT -1
+ENV COMPOSER_HOME /composer
+ENV COMPOSER_CACHE_DIR $COMPOSER_HOME/cache
+ENV PATH=${PATH}:${COMPOSER_BIN_DIR}
+
+ARG GROUP_ID=1000
+ARG USER_ID=1000
+
+RUN (deluser  www-data || true) && (delgroup www-data || true) && \
+    addgroup -g ${GROUP_ID} www-data && \
+    adduser \
+        --disabled-password \
+        --gecos "" \
+        --home ${COMPOSER_HOME} \
+        --ingroup www-data \
+        --uid ${USER_ID} \
+        www-data && \
+    chown --changes \
+        --silent \
+        --no-dereference \
+        --recursive \
+        ${USER_ID}:${GROUP_ID} \
+        ${COMPOSER_HOME}
+
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
+    mkdir -p ${COMPOSER_HOME} && \
+    chown -R www-data:www-data ${COMPOSER_HOME}
+
+COPY ./php.ini /usr/local/etc/php/conf.d/php.ini
+
+USER www-data
+
+RUN composer global require hirak/prestissimo
+
+RUN mkdir -p /var/www/
+
+WORKDIR /var/www
