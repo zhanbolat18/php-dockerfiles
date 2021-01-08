@@ -1,0 +1,135 @@
+stages:
+  - build
+  - test
+  - deploy
+
+cache:
+  paths:
+    - vendor/
+
+variables:
+  CONTAINER_TEST_IMAGE: $CI_REGISTRY_IMAGE:test
+  CONTAINER_DEPLOY_IMAGE: $CI_REGISTRY_IMAGE:deployer
+  CONTAINER_SPHINX_IMAGE: $CI_REGISTRY_IMAGE:sphinx
+
+build-images:
+  image:
+    name: docker:stable
+  stage: build
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+    DOCKER_HOST: tcp://thedockerhost:2375/
+  services:
+    - name: docker:dind
+      alias: thedockerhost
+  only:
+    - web
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --pull -t $CONTAINER_TEST_IMAGE -f docker/Dockerfile_cli docker
+    - docker build --pull -t $CONTAINER_DEPLOY_IMAGE -f docker/Dockerfile_deploy .
+    - docker push $CONTAINER_TEST_IMAGE
+    - docker push $CONTAINER_DEPLOY_IMAGE
+
+build-sphinx:
+  image:
+    name: docker:stable
+  stage: build
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+    DOCKER_HOST: tcp://thedockerhost:2375/
+    DB_HOST: 127.0.0.1
+    DB_USER: turanpress_dbuser
+    DB_PASSWD: 9e31wfB*
+    DB_NAME: db_turanpress
+    SPHINX_LISTEN_STRING: 39306:mysql41
+  services:
+    - name: docker:dind
+      alias: thedockerhost
+  only:
+    refs:
+      - develop
+    changes:
+      - docker/sphinx/*
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --build-arg SPHINX_LISTEN_STRING=$SPHINX_LISTEN_STRING --build-arg DB_HOST=$DB_HOST --build-arg DB_USER=$DB_USER --build-arg DB_PASSWD=$DB_PASSWD --build-arg DB_NAME=$DB_NAME --pull -t $CONTAINER_SPHINX_IMAGE docker/sphinx
+    - docker push $CONTAINER_SPHINX_IMAGE
+
+check-cs:
+  image: $CONTAINER_TEST_IMAGE
+  stage: test
+  only:
+    - merge_requests
+  script:
+    - composer install --quiet
+    - composer cs-fix-check
+
+run-tests:
+  image: $CONTAINER_TEST_IMAGE
+  stage: test
+  services:
+    - mysql:8
+  variables:
+    MYSQL_ROOT_PASSWORD: passwd
+    MYSQL_DATABASE: turanpress_test
+  only:
+    - merge_requests
+  before_script:
+    - composer install --quiet
+    - php init --env=Ci
+    - php yii_test fixture "*" --interactive=0
+  script:
+    - composer test
+
+deploy-stage:
+  image: $CONTAINER_DEPLOY_IMAGE
+  stage: deploy
+  only:
+    - develop
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$RUNNER_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "$RUNNER_SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - echo "$RUNNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+  script:
+    - deployer deploy stage -vvv
+
+deploy-sphinx:
+  stage: deploy
+  only:
+    refs:
+      - develop
+    changes:
+      - docker/sphinx/*
+  before_script:
+    - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - mkdir -p ~/.ssh
+    - eval $(ssh-agent -s)
+    - echo "$RUNNER_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+  script:
+    - ssh $STAGE_CONNECT_STRING "docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY"
+    - ssh $STAGE_CONNECT_STRING "docker pull $CONTAINER_SPHINX_IMAGE"
+    - ssh $STAGE_CONNECT_STRING "(docker ps -f name=turanpress_sphinx -q -a | xargs docker stop ) || true"
+    - ssh $STAGE_CONNECT_STRING "(docker ps -f name=turanpress_sphinx -q -a | xargs docker rm) || true"
+    - ssh $STAGE_CONNECT_STRING "docker run -d --restart always --network=host --name=\"turanpress_sphinx\"  $CONTAINER_SPHINX_IMAGE"
+
+deploy-prod:
+  image: $CONTAINER_DEPLOY_IMAGE
+  stage: deploy
+  only:
+    - master
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$SHH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+  script:
+    - deployer deploy prod -vvv
